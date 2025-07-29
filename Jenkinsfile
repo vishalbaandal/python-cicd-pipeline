@@ -10,7 +10,7 @@ pipeline {
     ECR_REGISTRY     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     FULL_IMAGE_NAME  = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
     EC2_USER         = 'ubuntu'
-    EC2_HOST         = '15.206.127.90'
+    EC2_HOST         = '13.126.226.242'
   }
 
   options {
