@@ -10,7 +10,7 @@ pipeline {
     ECR_REGISTRY     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     FULL_IMAGE_NAME  = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
     EC2_USER         = 'ubuntu'
-    EC2_HOST         = '15.206.127.90' 
+    EC2_HOST         = '15.206.127.90'
   }
 
   options {
@@ -26,38 +26,59 @@ pipeline {
       }
     }
 
-    stage('Docker Build & Tag') {
+    stage('Docker Build & Push to ECR') {
       steps {
-        sh '''
-          echo "[INFO] Logging into ECR..."
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+        withCredentials([[
+          $class: 'AmazonWebServicesCredentialsBinding',
+          credentialsId: 'aws-creds'
+        ]]) {
+          sh '''
+            echo "[INFO] Logging into AWS ECR..."
+            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-          echo "[INFO] Building Docker image..."
-          docker build -t "$ECR_REPOSITORY:$IMAGE_TAG" .
+            echo "[INFO] Building Docker image..."
+            docker build -t "$ECR_REPOSITORY:$IMAGE_TAG" .
 
-          echo "[INFO] Tagging Docker image..."
-          docker tag "$ECR_REPOSITORY:$IMAGE_TAG" "$FULL_IMAGE_NAME"
-        '''
-      }
-    }
+            echo "[INFO] Tagging Docker image..."
+            docker tag "$ECR_REPOSITORY:$IMAGE_TAG" "$FULL_IMAGE_NAME"
 
-    stage('Push to ECR') {
-      steps {
-        sh '''
-          echo "[INFO] Pushing image to ECR..."
-          docker push "$FULL_IMAGE_NAME"
-        '''
+            echo "[INFO] Pushing image to ECR..."
+            docker push "$FULL_IMAGE_NAME"
+          '''
+        }
       }
     }
 
     stage('Deploy to EC2') {
       steps {
         sshagent(credentials: ['ec2-ssh-key']) {
-          sh '''
-            echo "[INFO] Executing remote deployment script on EC2..."
+          withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-creds'
+          ]]) {
+            sh '''
+              echo "[INFO] Executing deployment on EC2..."
 
-            ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST 'bash -s' < ./deploy.sh
-          '''
+              ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << EOF
+                export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+                export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+                export AWS_DEFAULT_REGION=$AWS_REGION
+
+                echo "[INFO] Logging into ECR on EC2..."
+                aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+                echo "[INFO] Pulling Docker image..."
+                docker pull "$FULL_IMAGE_NAME"
+
+                echo "[INFO] Stopping old container..."
+                docker stop "$CONTAINER_NAME" || true
+                docker rm "$CONTAINER_NAME" || true
+
+                echo "[INFO] Starting new container..."
+                docker run -d --name "$CONTAINER_NAME" -p 80:80 "$FULL_IMAGE_NAME"
+              EOF
+            '''
+          }
         }
       }
     }
